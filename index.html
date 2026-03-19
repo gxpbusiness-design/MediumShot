@@ -706,15 +706,16 @@ td.ms-editable:hover { background:var(--hover); }
 }
 .ms-stills-scene-count { font-size:11px; color:var(--text3); }
 .ms-stills-grid {
-  display:grid; grid-template-columns:repeat(3,1fr); gap:12px;
+  columns: 3; column-gap: 12px;
 }
 .ms-still-card {
   border-radius:12px; overflow:hidden; position:relative;
   border:1px solid var(--border); background:var(--card2);
-  cursor:pointer; transition:all .18s; aspect-ratio:3/2;
+  cursor:pointer; transition:all .18s;
+  break-inside: avoid; margin-bottom: 12px; display: block;
 }
 .ms-still-card:hover { border-color:var(--c1); transform:translateY(-3px); box-shadow:0 8px 28px rgba(0,0,0,.15); }
-.ms-still-card img { width:100%; height:100%; object-fit:cover; display:block; }
+.ms-still-card img { width:100%; height:auto; display:block; }
 .ms-still-card-info {
   position:absolute; bottom:0; left:0; right:0;
   background:linear-gradient(to top,rgba(0,0,0,.82),transparent);
@@ -730,6 +731,16 @@ td.ms-editable:hover { background:var(--hover); }
   font-size:10px; align-items:center; justify-content:center;
 }
 .ms-still-card:hover .ms-still-card-del { display:flex; }
+.ms-still-card.dragging { opacity:.35; border-style:dashed; }
+.ms-still-card.drag-over { border-color:var(--c1); box-shadow:0 0 0 2px var(--c1); }
+.ms-still-drag-handle {
+  position:absolute; top:7px; left:7px; display:none;
+  width:22px; height:22px; border-radius:50%;
+  background:rgba(0,0,0,.55); color:#fff; border:none; cursor:grab;
+  align-items:center; justify-content:center; font-size:11px;
+  z-index:2;
+}
+.ms-still-card:hover .ms-still-drag-handle { display:flex; }
 .ms-still-empty {
   grid-column:1/-1; text-align:center; padding:32px;
   color:var(--text3); font-size:13px;
@@ -1536,13 +1547,13 @@ button, input, select, textarea { font-family:var(--font-display); }
     <div class="ms-topbar">
       <div class="ms-topbar-title" id="ms-topbar-title">Home</div>
       <div class="ms-topbar-actions" id="ms-topbar-actions">
-        <button class="ms-btn ghost" onclick="msExport()" style="font-size:11px">
+        <button class="ms-btn ghost" onclick="msExport()" style="font-size:11px" title="Export full app profile as JSON">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Export
+          Backup
         </button>
-        <button class="ms-btn ghost" onclick="msImport()" style="font-size:11px">
+        <button class="ms-btn ghost" onclick="msImport()" style="font-size:11px" title="Restore full app profile from JSON backup">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          Import
+          Restore
         </button>
       </div>
     </div>
@@ -1654,6 +1665,11 @@ button, input, select, textarea { font-family:var(--font-display); }
       <div class="ms-proj-tab-panel" id="proj-tab-shotlists">
         <div class="ms-sec-hdr">
           <div class="ms-sec-title">Shot Lists</div>
+          <label class="ms-btn ghost" style="font-size:11px;cursor:pointer;gap:5px" title="Import CSV into a new shot list">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Import CSV
+            <input type="file" accept=".csv" style="display:none" onchange="msHandleCSV(event)">
+          </label>
           <button class="ms-btn accent" onclick="msSlNew()" style="font-size:11px">+ New List</button>
         </div>
         <div class="ms-sl-grid" id="ms-sl-grid"></div>
@@ -1667,6 +1683,7 @@ button, input, select, textarea { font-family:var(--font-display); }
             All Lists
           </button>
           <div class="ms-sec-title" id="sl-editor-title" style="margin-left:4px">Shot List</div>
+          <span id="sl-shot-count" style="font-size:11px;color:var(--text3);font-family:var(--font-mono)"></span>
           <div style="display:flex;align-items:center;background:rgba(60,60,67,.08);border-radius:9px;padding:3px;gap:2px">
             <button id="sl-full-btn" onclick="msShotView('full')"
               style="padding:5px 13px;border-radius:7px;border:none;font-family:var(--font-display);font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;background:#fff;color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.1)">
@@ -4113,6 +4130,19 @@ function msSlDelete(i) {
 function msRenderShotTable(){
   const tbody=document.getElementById('ms-shot-tbody');if(!tbody)return;
 
+  // Guard: ensure _selectedShots exists (can be wiped by Object.assign on save/load)
+  if (!MS._selectedShots || typeof MS._selectedShots.has !== 'function') {
+    MS._selectedShots = new Set();
+  }
+
+  // Always clear scene filter
+  MS._sceneFilter = null;
+
+  // Update shot count badge
+  const countBadge = document.getElementById('sl-shot-count');
+  if (countBadge) countBadge.textContent = (MS.shots||[]).length + ' shots';
+
+
   // Framing badge color map
   const framingColor = {
     CU:'rgba(88,86,214,.12):#5856d6', MCU:'rgba(0,122,255,.12):#007aff',
@@ -4146,10 +4176,10 @@ function msRenderShotTable(){
     const ecTxt = (field, val, cls='', sty='') =>
       `<td class="ms-editable ${cls}" style="font-size:12px;${sty}" onclick="msCellEdit(this,${i},'${field}','text')">${val ? msEsc(val) : '<span style="color:var(--text3);opacity:.4">—</span>'}</td>`;
     const ecSel = (field, val, opts, cls='') =>
-      `<td class="ms-editable ${cls}" onclick="msCellEdit(this,${i},'${field}','select',${JSON.stringify(opts)})">${framingBadge(val||'')}</td>`;
+      `<td class="ms-editable ${cls}" onclick="msCellEdit(this,${i},'${field}','select',${JSON.stringify(opts).replace(/"/g,'&quot;')})">${framingBadge(val||'')}</td>`;
     const ecSelPlain = (field, val, opts, cls='') =>
-      `<td class="ms-editable ${cls}" style="font-size:12px;color:var(--text2)" onclick="msCellEdit(this,${i},'${field}','select',${JSON.stringify(opts)})">${val ? msEsc(val) : '<span style="color:var(--text3);opacity:.4">—</span>'}</td>`;
-    rows += `<tr>
+      `<td class="ms-editable ${cls}" style="font-size:12px;color:var(--text2)" onclick="msCellEdit(this,${i},'${field}','select',${JSON.stringify(opts).replace(/"/g,'&quot;')})">${val ? msEsc(val) : '<span style="color:var(--text3);opacity:.4">—</span>'}</td>`;
+    rows += `<tr >
     <td style="text-align:center;padding-left:10px;width:36px"><input type="checkbox" class="sl-shot-cb" style="width:14px;height:14px;cursor:pointer;accent-color:var(--c1)" ${MS._selectedShots.has(i)?'checked':''} onchange="msShotToggleSelect(${i},this.checked)" onclick="event.stopPropagation()"></td>
     ${ecNum('scene', s.scene)}
     ${ecNum('setup', s.setup)}
@@ -4640,8 +4670,21 @@ function msImportCSV(){
 
 function msHandleCSV(evt){
   const file=(evt.target||evt).files[0]; if(!file) return;
+  // Reset so same file can be picked again
+  if (evt.target) evt.target.value = '';
   const reader=new FileReader();
-  reader.onload=e=>{ const rows=msParseCSV(e.target.result); if(!rows.length){msFlash('No data found');return;} _importRows=rows; msOpenImportModal(); };
+  reader.onload=e=>{
+    const text = e.target.result;
+    const rows = msParseCSV(text);
+    if(!rows.length){
+      // Try to show why: how many lines were found?
+      const lineCount = text.split('\n').filter(l=>l.trim()).length;
+      msFlash(lineCount < 2 ? 'CSV is empty or has only one row' : `No shots matched — check column headers (need: scene, shot, subject, or description)`);
+      return;
+    }
+    _importRows=rows;
+    msOpenImportModal();
+  };
   reader.readAsText(file);
 }
 
@@ -4656,43 +4699,76 @@ function msParseCSV(text){
     }
     fields.push(cur.trim());return fields;
   }
-  // Filter out blank lines AND all-empty-field rows (e.g. leading ",,,,")
   const lines=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n')
     .filter(l=>l.trim() && parseLine(l).some(f=>f.trim()));
   if(lines.length<2) return [];
-  const headers=parseLine(lines[0]).map(h=>h.toLowerCase().replace(/[^a-z0-9]/g,''));
-  const fi=(fn)=>headers.findIndex(h=>fn(h));
-  // Headers after strip: scene→scene, setup, shot, frame/framing→framing, subject, lens, movement, note/notes→desc, scriptreference→desc
+
+  const rawHeaders = parseLine(lines[0]);
+  const headers = rawHeaders.map(h=>h.toLowerCase().replace(/[^a-z0-9]/g,''));
+
+  function fi(fn){ return headers.findIndex(h=>fn(h)); }
+
+  // Flexible column matching — catches most real-world shot list exports
   const idx={
-    scene:    fi(h=>h==='scene'||h.startsWith('scene')&&(h.includes('num')||h.length<=6)),
-    heading:  fi(h=>h.includes('heading')||h.includes('location')||h==='sceneheading'),
-    setup:    fi(h=>h==='setup'),
-    shot:     fi(h=>h==='shot'||h==='shotnumber'),
-    frame:    fi(h=>h==='frame'||h==='framing'||h.includes('framing')),
-    subject:  fi(h=>h.includes('subject')),
-    lens:     fi(h=>h.includes('lens')),
-    movement: fi(h=>h.includes('movement')||h==='move'),
-    notes:    fi(h=>h==='note'||h==='notes'||h.includes('notes')),
-    scriptref:fi(h=>h.includes('script')||h.includes('scriptref')||h.includes('description')||h.includes('ref')),
-    status:   fi(h=>h==='status'),
-    done:     fi(h=>h==='done'||h==='complete'||h==='completed'||h==='true'||h==='false'),
+    scene:    fi(h=>h==='scene'||h==='sc'||h==='scenenum'||h==='scenenumber'||h==='scn'||(h.startsWith('scene')&&h.length<=8)),
+    heading:  fi(h=>h.includes('heading')||h.includes('location')||h==='loc'||h==='sceneheading'||h==='int'||h==='intext'),
+    setup:    fi(h=>h==='setup'||h==='su'||h==='setnum'||h==='setupnum'||h==='setupnumber'),
+    shot:     fi(h=>h==='shot'||h==='sh'||h==='shotnumber'||h==='shotnum'||h==='shotno'||h==='take'),
+    frame:    fi(h=>h==='frame'||h==='framing'||h==='framesize'||h==='shotsize'||h==='shottype'||h==='size'||h==='type'||h.includes('framing')||h.includes('framesize')),
+    subject:  fi(h=>h.includes('subject')||h==='actor'||h==='talent'||h==='character'||h==='action'||h==='who'),
+    lens:     fi(h=>h.includes('lens')||h==='mm'||h==='focal'),
+    movement: fi(h=>h.includes('movement')||h==='move'||h==='cam'||h==='cammove'||h.includes('dolly')||h.includes('motion')),
+    camera:   fi(h=>h==='camera'||h==='cam'||h==='camera'||h==='rig'),
+    angle:    fi(h=>h==='angle'||h==='camangle'||h.includes('angle')),
+    equipment:fi(h=>h.includes('equip')||h==='gear'||h.includes('dolly')||h.includes('crane')),
+    sound:    fi(h=>h==='sound'||h==='audio'||h==='mic'||h.includes('sound')),
+    notes:    fi(h=>h==='note'||h==='notes'||h==='comment'||h==='comments'||h.includes('notes')),
+    scriptref:fi(h=>h.includes('script')||h.includes('description')||h==='desc'||h.includes('ref')||h==='detail'||h==='details'||h==='action'),
+    status:   fi(h=>h==='status'||h==='done'||h==='complete'||h==='completed'||h==='shot'),
   };
+
   function normalizeStatus(raw) {
     const v = (raw||'').trim().toLowerCase();
-    if (v==='d'||v==='done'||v==='true'||v==='yes'||v==='complete'||v==='completed') return 'd';
+    if (v==='d'||v==='done'||v==='true'||v==='yes'||v==='complete'||v==='completed'||v==='1') return 'd';
     if (v==='rs'||v==='reshoot'||v==='re-shoot') return 'rs';
-    return 'ns'; // default: not shot
+    return 'ns';
   }
-  return lines.slice(1).map(line=>{
-    const f=parseLine(line);
-    const g=i=>(i>=0&&i<f.length?f[i]:'');
-    // Status: prefer explicit Status column, fall back to boolean done column
-    const rawStatus = g(idx.status) || g(idx.done);
-    return {scene:g(idx.scene),heading:g(idx.heading),setup:g(idx.setup),shot:g(idx.shot),
-            framing:g(idx.frame),subject:g(idx.subject),lens:g(idx.lens),movement:g(idx.movement),
-            desc:g(idx.scriptref)||g(idx.notes),status:normalizeStatus(rawStatus),
-            camera:'',angle:'',equipment:'',sound:''};
-  }).filter(r=>r.scene||r.subject||r.desc);
+
+  const rows = lines.slice(1).map(line=>{
+    const f = parseLine(line);
+    const g = i => (i>=0 && i<f.length ? f[i].trim() : '');
+
+    // Fallback: if no column matched, use positional order (scene,setup,shot,intExt,subject,framing,desc)
+    const noMappings = Object.values(idx).every(v => v < 0);
+    if (noMappings) {
+      return { scene:f[0]||'', setup:f[1]||'', shot:f[2]||'', intExt:f[3]||'',
+               subject:f[4]||'', framing:f[5]||'', desc:f[6]||f.slice(6).join(' ')||'',
+               lens:'', movement:'', camera:'', angle:'', equipment:'', sound:'',
+               status:'ns' };
+    }
+
+    const rawStatus = g(idx.status);
+    return {
+      scene:    g(idx.scene),
+      heading:  g(idx.heading),
+      setup:    g(idx.setup),
+      shot:     g(idx.shot),
+      intExt:   g(idx.heading), // use heading/location for int/ext if available
+      framing:  g(idx.frame),
+      subject:  g(idx.subject),
+      lens:     g(idx.lens),
+      movement: g(idx.movement),
+      camera:   g(idx.camera),
+      angle:    g(idx.angle),
+      equipment:g(idx.equipment),
+      sound:    g(idx.sound),
+      desc:     g(idx.scriptref) || g(idx.notes),
+      status:   normalizeStatus(rawStatus),
+    };
+  });
+
+  // Keep any row that has at least one non-empty field
+  return rows.filter(r => Object.values(r).some(v => v && v !== 'ns'));
 }
 
 function msOpenImportModal(){
@@ -4748,16 +4824,25 @@ function msIRemove(i){
 }
 
 function msConfirmImport(){
-  const append=document.getElementById('sl-import-append').checked;
-  if(!append) MS.shots=[];
-  _importRows.forEach(r=>MS.shots.push({...r}));
-  // Sync immediately to active shot list
-  if (MS.activeShotlist != null) {
-    const sl=msGetShotlists()[MS.activeShotlist];
-    if(sl) sl.shots=MS.shots;
+  const append = document.getElementById('sl-import-append').checked;
+  if (!append) MS.shots = [];
+  _importRows.forEach(r => MS.shots.push({...r}));
+
+  // Must have an active project and shotlist
+  if (MS.activeProject == null) { msFlash('Open a project first'); return; }
+  if (MS.activeShotlist == null) {
+    const sls = msGetShotlists();
+    sls.push({ id: Date.now(), name: 'Imported Shot List', created: Date.now(), shots: [] });
+    MS.activeShotlist = sls.length - 1;
   }
-  msSave();msRenderShotTable();msCloseImport();
-  msFlash(`${_importRows.length} shots imported`);
+
+  const sl = msGetShotlists()[MS.activeShotlist];
+  if (sl) sl.shots = MS.shots;
+
+  msSave();
+  msRenderShotTable();
+  msCloseImport();
+  msFlash(`✓ ${_importRows.length} shots imported`);
 }
 
 function msShotCycleStatus(i){
@@ -5670,6 +5755,40 @@ function msStillsExport() {
   msFlash('Stills exported');
 }
 
+let _stillDragSrc = null;
+function msStillDragStart(e, idx) {
+  _stillDragSrc = idx;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', idx);
+  setTimeout(() => e.target.closest('.ms-still-card')?.classList.add('dragging'), 0);
+}
+function msStillDragOver(e, idx) {
+  if (_stillDragSrc === null || _stillDragSrc === idx) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.ms-still-card').forEach(c => c.classList.remove('drag-over'));
+  e.target.closest('.ms-still-card')?.classList.add('drag-over');
+}
+function msStillDragLeave(e) {
+  e.target.closest('.ms-still-card')?.classList.remove('drag-over');
+}
+function msStillDragDrop(e, targetIdx) {
+  e.preventDefault();
+  e.stopPropagation();
+  document.querySelectorAll('.ms-still-card').forEach(c => c.classList.remove('drag-over','dragging'));
+  if (_stillDragSrc === null || _stillDragSrc === targetIdx) return;
+  const stills = msGetStills();
+  const [moved] = stills.splice(_stillDragSrc, 1);
+  const newTarget = _stillDragSrc < targetIdx ? targetIdx - 1 : targetIdx;
+  stills.splice(newTarget, 0, moved);
+  _stillDragSrc = null;
+  msSave(); msRenderStills();
+}
+function msStillDragEnd(e) {
+  document.querySelectorAll('.ms-still-card').forEach(c => c.classList.remove('dragging','drag-over'));
+  _stillDragSrc = null;
+}
+
 function msRenderStills() {
   const board = document.getElementById('ms-stills-board');
   if (!board) return;
@@ -5735,7 +5854,16 @@ function msRenderStills() {
       const shotLabel = linkedShot
         ? `Shot ${linkedShot.shot||'?'} · ${linkedShot.subject||linkedShot.framing||'—'}`
         : '';
-      return `<div class="ms-still-card" onclick="msStillView(${s._idx})" oncontextmenu="msStillCtxOpen(event,${s._idx})">
+      return `<div class="ms-still-card" draggable="true"
+        data-still-idx="${s._idx}"
+        onclick="msStillView(${s._idx})"
+        oncontextmenu="msStillCtxOpen(event,${s._idx})"
+        ondragstart="msStillDragStart(event,${s._idx})"
+        ondragover="msStillDragOver(event,${s._idx})"
+        ondragleave="msStillDragLeave(event)"
+        ondrop="msStillDragDrop(event,${s._idx})"
+        ondragend="msStillDragEnd(event)">
+        <div class="ms-still-drag-handle" onmousedown="event.stopPropagation()" title="Drag to reorder">⠿</div>
         <img src="${msEsc(s.url)}" alt="" onerror="this.parentNode.style.background='var(--card2)'">
         <div class="ms-still-card-info">
           ${shotLabel ? `<div class="ms-still-card-shot">${msEsc(shotLabel)}</div>` : ''}
@@ -6405,5 +6533,6 @@ if(MS.profile){
   document.addEventListener('mouseout', function(){ cur.classList.remove('hover'); });
 })();
 </script>
+
 </body>
 </html>
